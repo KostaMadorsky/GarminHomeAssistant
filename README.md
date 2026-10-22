@@ -218,6 +218,8 @@ The following table indicates how HomeAssistant entity types can map to the Garm
 
 Multiple templates are evaluated in a single HTTP request to update their status. Only the toggle items have the on/off <img src="images/toggle_icon.png" height="20"> icon. NB. All `tap` and `numeric` items must specify a `action` tag in the `tap_action` object (see example below).
 
+Groups can optionally control when their descendants are loaded and refreshed with `lazy_loading` and `delayed_load`. Both are booleans and default to `false`. See [Group loading](examples/GroupLoading.md) for a forecast example and how nested groups behave.
+
 You can now specify alternative texts to use instead of "On" and "Off", e.g. "Locked" and "Unlocked" or "Open" and "Closed" through the use of a [template menu item](examples/Templates.md). But wouldn't having locks operated from your watch be a security concern ;-) ?
 
 The [schema](https://raw.githubusercontent.com/house-of-abbey/GarminHomeAssistant/main/config.schema.json) is checked by using a URL directly back to this GitHub source repository, so you do not need to install that file. You can just copy & paste your entity names from the YAML configuration files used to configure HomeAssistant. With a submenu, there's a difference between `title` and `name`. The `name` goes on the menu item, and the `title` at the head of the submenu. If your dashboard definition fails to meet the schema, the application will simply drop items with the wrong field names without warning to protect itself.

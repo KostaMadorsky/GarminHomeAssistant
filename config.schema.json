@@ -221,6 +221,16 @@
         "content": {
           "$ref": "#/$defs/content"
         },
+        "lazy_loading": {
+          "type": "boolean",
+          "default": false,
+          "description": "Load and refresh descendants only while this group is open (including its submenus). The group's own content still refreshes in its parent. Nested lazy groups wait until opened themselves."
+        },
+        "delayed_load": {
+          "type": "boolean",
+          "default": false,
+          "description": "Load and refresh descendants in a second request after non-delayed items. The group's own content remains in its parent's request. Applies recursively; lazy groups still wait until opened."
+        },
         "items": {
           "$ref": "#/$defs/items"
         },

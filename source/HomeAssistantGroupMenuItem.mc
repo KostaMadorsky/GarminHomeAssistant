@@ -20,7 +20,11 @@ using Toybox.WatchUi;
 //! a Home Assistant Template.
 //
 class HomeAssistantGroupMenuItem extends HomeAssistantMenuItem {
-    private var mMenu as HomeAssistantView;
+    private var mMenu as HomeAssistantView?;
+    private var mDefinition as Lang.Dictionary?;
+    private var mLazyLoading as Lang.Boolean;
+    private var mDelayedLoad as Lang.Boolean;
+    private var mEntered as Lang.Boolean = false;
 
     //! Class Constructor
     //
@@ -44,13 +48,36 @@ class HomeAssistantGroupMenuItem extends HomeAssistantMenuItem {
             options
         );
 
-        mMenu = new HomeAssistantView(definition, null);
+        mLazyLoading = definition.get("lazy_loading") == true;
+        mDelayedLoad = definition.get("delayed_load") == true;
+        if (mLazyLoading || mDelayedLoad) {
+            mDefinition = definition;
+        } else {
+            mMenu = new HomeAssistantView(definition, null);
+        }
     }
 
     //! Return the submenu for this group menu item.
     //
     function getMenuView() as HomeAssistantView {
+        if (mMenu == null) {
+            mMenu = new HomeAssistantView(mDefinition, null);
+            mDefinition = null;
+        }
         return mMenu;
+    }
+
+    //! Lazy descendants refresh only while this group is on the navigation path.
+    function setEntered(entered as Lang.Boolean) as Void {
+        mEntered = entered;
+    }
+
+    function shouldUpdateChildren() as Lang.Boolean {
+        return !mLazyLoading || mEntered;
+    }
+
+    function isDelayedLoad() as Lang.Boolean {
+        return mDelayedLoad;
     }
 
 }

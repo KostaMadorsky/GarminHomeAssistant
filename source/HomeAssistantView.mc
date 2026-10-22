@@ -219,9 +219,12 @@ class HomeAssistantView extends WatchUi.Menu2 {
     //!
     //! NB. Lang.Array.addAll() fails structural type checking without including "Null" in the return type
     //!
+    //! @param delayed Select the ordinary (false) or delayed (true) batch.
+    //! @param inheritedDelay Whether an ancestor delays all items in this submenu.
+    //!
     //! @return An array of menu items that need to be updated periodically to reflect the latest Home Assistant state.
     //
-    function getItemsToUpdate() as Lang.Array<HomeAssistantToggleMenuItem or HomeAssistantTapMenuItem or HomeAssistantGroupMenuItem or HomeAssistantNumericMenuItem or HomeAssistantSelectMenuItem or Null> {
+    function getItemsToUpdate(delayed as Lang.Boolean, inheritedDelay as Lang.Boolean) as Lang.Array<HomeAssistantToggleMenuItem or HomeAssistantTapMenuItem or HomeAssistantGroupMenuItem or HomeAssistantNumericMenuItem or HomeAssistantSelectMenuItem or Null> {
         var fullList = [];
         var lmi = mItems as Lang.Array<WatchUi.MenuItem>;
 
@@ -230,10 +233,17 @@ class HomeAssistantView extends WatchUi.Menu2 {
             if (item instanceof HomeAssistantGroupMenuItem) {
                 // Group menu items can now have an optional template to evaluate
                 var gmi = item as HomeAssistantGroupMenuItem;
-                if (gmi.hasTemplate()) {
+                if (delayed == inheritedDelay && gmi.hasTemplate()) {
                     fullList.add(item);
                 }
-                fullList.addAll(item.getMenuView().getItemsToUpdate());
+                var childDelay = inheritedDelay || gmi.isDelayedLoad();
+                // A group's own summary belongs to its parent, not its descendants.
+                // Do not even construct delayed children during the first pass.
+                if (gmi.shouldUpdateChildren() && (delayed || !childDelay)) {
+                    fullList.addAll(gmi.getMenuView().getItemsToUpdate(delayed, childDelay));
+                }
+            } else if (delayed != inheritedDelay) {
+                continue;
             } else if (item instanceof HomeAssistantNumericMenuItem) {
                 // Numeric items can have an optional template to evaluate, but they must always be included in order
                 // to initialise the numeric picker's value.
@@ -267,6 +277,12 @@ class HomeAssistantView extends WatchUi.Menu2 {
 class HomeAssistantViewDelegate extends WatchUi.Menu2InputDelegate {
     private var mIsRootMenuView as Lang.Boolean = false;
     private var mTimer          as QuitTimer;
+    private var mGroup          as HomeAssistantGroupMenuItem?;
+
+    //! Remember the entered group until Back, including time spent in nested views.
+    function setGroup(group as HomeAssistantGroupMenuItem) as Void {
+        mGroup = group;
+    }
 
     //! Class Constructor
     //!
@@ -292,7 +308,11 @@ class HomeAssistantViewDelegate extends WatchUi.Menu2InputDelegate {
             System.exit();  
         }
 
+        if (mGroup != null) {
+            mGroup.setEntered(false);
+        }
         WatchUi.popView(WatchUi.SLIDE_RIGHT);
+        getApp().menuNavigationChanged();
     }
 
     //! Only for CheckboxMenu
@@ -342,7 +362,11 @@ class HomeAssistantViewDelegate extends WatchUi.Menu2InputDelegate {
             }
         } else if (item instanceof HomeAssistantGroupMenuItem) {
             var haMenuItem = item as HomeAssistantGroupMenuItem;
-            WatchUi.pushView(haMenuItem.getMenuView(), new HomeAssistantViewDelegate(false), WatchUi.SLIDE_LEFT);
+            var delegate = new HomeAssistantViewDelegate(false);
+            delegate.setGroup(haMenuItem);
+            haMenuItem.setEntered(true);
+            WatchUi.pushView(haMenuItem.getMenuView(), delegate, WatchUi.SLIDE_LEFT);
+            getApp().menuNavigationChanged();
         }
     }
 
