@@ -68,8 +68,10 @@ class HomeAssistantGroupMenuItem extends HomeAssistantMenuItem {
     }
 
     //! Lazy descendants refresh only while this group is on the navigation path.
-    function setEntered(entered as Lang.Boolean) as Void {
+    function setEntered(entered as Lang.Boolean) as Lang.Boolean {
+        var changed = mEntered != entered;
         mEntered = entered;
+        return mLazyLoading && changed;
     }
 
     function shouldUpdateChildren() as Lang.Boolean {

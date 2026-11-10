@@ -1,5 +1,5 @@
-// Regression tests for recursive group loading. Compile with monkeyc -t and run
-// with monkeydo <program> <device> /t. Test code is omitted from normal builds.
+// Distributed under MIT Licence.
+// Compile with monkey.jungle;monkey-test.jungle and monkeyc --unit-test.
 using Toybox.Lang;
 using Toybox.Test;
 using Toybox.WatchUi;
@@ -52,9 +52,11 @@ module GroupLoadingTests {
         ])]);
         Test.assertEqual(labels(menu, false), "first,forecast,");
         var forecast = childGroup(menu, 1);
-        forecast.setEntered(true);
+        Test.assertEqual(forecast.setEntered(true), true);
+        Test.assertEqual(forecast.setEntered(true), false);
         Test.assertEqual(labels(menu, false), "first,forecast,today,daily,tomorrow,");
-        forecast.setEntered(false);
+        Test.assertEqual(forecast.setEntered(false), true);
+        Test.assertEqual(forecast.setEntered(false), false);
         Test.assertEqual(labels(menu, false), "first,forecast,");
         forecast.setEntered(true);
         Test.assertEqual(labels(menu, false), "first,forecast,today,daily,tomorrow,");
@@ -135,17 +137,32 @@ module GroupLoadingTests {
 
     (:test)
     function plainMenuItemsKeepLoadingPolicy(logger as Test.Logger) as Lang.Boolean {
+        var previous = Toybox.Application.Properties.getValue("show_type_icons");
         Toybox.Application.Properties.setValue("show_type_icons", false);
         Settings.update();
-        var menu = view([group("forecast", true, false, [info("today")])]);
-        Test.assertEqual(labels(menu, false), "forecast,");
-        var forecast = childGroup(menu, 0);
-        forecast.setEntered(true);
-        Test.assertEqual(labels(menu, false), "forecast,today,");
-        forecast.setEntered(false);
-        Test.assertEqual(labels(menu, false), "forecast,");
-        Toybox.Application.Properties.setValue("show_type_icons", true);
-        Settings.update();
+        try {
+            var menu = view([group("forecast", true, false, [info("today")])]);
+            Test.assertEqual(labels(menu, false), "forecast,");
+            var forecast = childGroup(menu, 0);
+            forecast.setEntered(true);
+            Test.assertEqual(labels(menu, false), "forecast,today,");
+            forecast.setEntered(false);
+            Test.assertEqual(labels(menu, false), "forecast,");
+        } finally {
+            Toybox.Application.Properties.setValue("show_type_icons", previous);
+            Settings.update();
+        }
+        return true;
+    }
+
+    (:test)
+    function eagerNavigationDoesNotChangeEligibility(logger as Test.Logger) as Lang.Boolean {
+        var menu = view([group("controls", false, false, [info("value")])]);
+        var controls = childGroup(menu, 0);
+        Test.assertEqual(controls.setEntered(true), false);
+        Test.assertEqual(labels(menu, false), "controls,value,");
+        Test.assertEqual(controls.setEntered(false), false);
+        Test.assertEqual(labels(menu, false), "controls,value,");
         return true;
     }
 }

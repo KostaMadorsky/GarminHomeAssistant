@@ -308,11 +308,11 @@ class HomeAssistantViewDelegate extends WatchUi.Menu2InputDelegate {
             System.exit();  
         }
 
-        if (mGroup != null) {
-            mGroup.setEntered(false);
-        }
+        var refresh = mGroup != null && mGroup.setEntered(false);
         WatchUi.popView(WatchUi.SLIDE_RIGHT);
-        getApp().menuNavigationChanged();
+        if (refresh) {
+            getApp().menuNavigationChanged();
+        }
     }
 
     //! Only for CheckboxMenu
@@ -364,9 +364,11 @@ class HomeAssistantViewDelegate extends WatchUi.Menu2InputDelegate {
             var haMenuItem = item as HomeAssistantGroupMenuItem;
             var delegate = new HomeAssistantViewDelegate(false);
             delegate.setGroup(haMenuItem);
-            haMenuItem.setEntered(true);
+            var refresh = haMenuItem.setEntered(true);
             WatchUi.pushView(haMenuItem.getMenuView(), delegate, WatchUi.SLIDE_LEFT);
-            getApp().menuNavigationChanged();
+            if (refresh) {
+                getApp().menuNavigationChanged();
+            }
         }
     }
 
