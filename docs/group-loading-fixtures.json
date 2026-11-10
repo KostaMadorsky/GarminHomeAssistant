@@ -1,0 +1,40 @@
+{
+  "sdk": "9.2.0-2026-06-09-92a1605b2",
+  "upstream": "795a986eb184896e475816481aa8469dbd16d76f",
+  "methodology": {
+    "compile": "release (-r), no -t/no profiler",
+    "parser": "Communications real JSON responses over loopback HTTP",
+    "frontView": "identical blank view; production menu trees instantiated but not displayed",
+    "cacheConfig": false,
+    "typeIcons": true,
+    "garbageCollection": "automatic only; no public forced collection used",
+    "memory": "System.getSystemStats current used/free; maximum observed samples is not allocation or network-parser peak",
+    "baselineCaveat": "upstream instrumentation omits lazy navigation branch; compare feature modes within identical binary for clean policy effects"
+  },
+  "fixtures": {
+    "8": {
+      "forecastRows": 8,
+      "ordinaryRows": 8,
+      "groups": 7,
+      "templates": 23,
+      "jsonBytes": 2708,
+      "sha256": "d0b650bd474921a2e374fa34ad5f841a3f35e808117aeea9e65b05c7489096ee"
+    },
+    "14": {
+      "forecastRows": 14,
+      "ordinaryRows": 8,
+      "groups": 7,
+      "templates": 29,
+      "jsonBytes": 3459,
+      "sha256": "a4f60b6304666d526cb0038da491de8202ec4687b53a41b0738064fdd3728b76"
+    },
+    "34": {
+      "forecastRows": 34,
+      "ordinaryRows": 8,
+      "groups": 7,
+      "templates": 49,
+      "jsonBytes": 5959,
+      "sha256": "47521eee17cd879992cb9fc3f2367bdecdf9399935772bacf6a095a8217707ac"
+    }
+  }
+}

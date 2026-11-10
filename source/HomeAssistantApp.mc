@@ -42,9 +42,18 @@ class HomeAssistantApp extends Application.AppBase {
     private var mItemsToUpdate  as Lang.Array<HomeAssistantToggleMenuItem or HomeAssistantTapMenuItem or HomeAssistantGroupMenuItem or HomeAssistantNumericMenuItem or HomeAssistantSelectMenuItem>?;
     private var mIsApp          as Lang.Boolean     = false; // Or Widget
     private var mUpdating       as Lang.Boolean     = false; // Don't start a second chain of updates
-    private var mTemplates      as Lang.Dictionary? = null;  // Cache of compiled templates
+    private var mTemplates      as Lang.Dictionary? = null;  // Templates for the in-flight batch
     private var mNotifiedNoBle  as Lang.Boolean     = false;
     private var mIsCacheChecked as Lang.Boolean     = false;
+    private var mDelayedUpdate  as Lang.Boolean     = false;
+    private var mRequestInFlight as Lang.Boolean    = false;
+    private var mMenuChanged    as Lang.Boolean     = false;
+    private var mRefreshPending as Lang.Boolean     = false;
+    private var mCycleHadRequest as Lang.Boolean    = false;
+    private var mOrdinaryItems  as Lang.Array? = null;
+    private var mOrdinaryTemplates as Lang.Dictionary? = null;
+    private var mDelayedItems   as Lang.Array? = null;
+    private var mDelayedTemplates as Lang.Dictionary? = null;
 
     //! Class Constructor
     // 
@@ -350,12 +359,14 @@ class HomeAssistantApp extends Application.AppBase {
     //!
     //! @param menu The dictionary derived from the JSON menu fetched by `fetchMenuConfig()`.
     //
-    private function buildMenu(menu as Lang.Dictionary) {
+    function buildMenu(menu as Lang.Dictionary) as HomeAssistantView {
+        clearMenuUpdateCache();
         mHaMenu = new HomeAssistantView(menu, null);
         mQuitTimer.begin();
         if (!Settings.getWebhookId().equals("") && !Settings.getClearWebhookId()) {
             startUpdates();
         } // If not, this will be done via a chain in Settings.webhook() and mWebhookManager.requestWebhookId() that registers the sensors.
+        return mHaMenu;
     }
 
     //! Start the periodic menu updates for as long as the application is running.
@@ -364,6 +375,69 @@ class HomeAssistantApp extends Application.AppBase {
         if (mHaMenu != null and !mUpdating) {
             // Start the continuous update process that continues for as long as the application is running.
             mUpdating = true;
+            updateMenuItems();
+        }
+    }
+
+    //! Refresh the new navigation path without changing an in-flight response's indexes.
+    function menuNavigationChanged() as Void {
+        mMenuChanged = true;
+        if (mUpdating && !mRequestInFlight) {
+            mUpdateTimer.stop();
+            mDelayedUpdate = false;
+            updateMenuItems();
+        }
+    }
+
+    //! Release obsolete snapshots only after their request has completed.
+    private function clearMenuUpdateCache() as Void {
+        mItemsToUpdate = null;
+        mTemplates = null;
+        mOrdinaryItems = null;
+        mOrdinaryTemplates = null;
+        mDelayedItems = null;
+        mDelayedTemplates = null;
+    }
+
+    //! Schedule polling without allocating a second backoff timer.
+    function scheduleMenuUpdate(delay as Lang.Number) as Void {
+        if (mUpdateTimer == null) {
+            mUpdateTimer = new Timer.Timer();
+        }
+        mUpdateTimer.start(method(:updateMenuItems), delay, false);
+    }
+
+    //! Advance from the ordinary batch to the delayed batch, then resume polling.
+    private function finishMenuUpdate() as Void {
+        if (mMenuChanged) {
+            mDelayedUpdate = false;
+            updateMenuItems();
+            return;
+        }
+        if (!mDelayedUpdate) {
+            mDelayedUpdate = true;
+            updateMenuItems();
+            return;
+        }
+        mDelayedUpdate = false;
+        if (Settings.getMenuCheck() && Settings.getCacheConfig() && !mIsCacheChecked) {
+            var stats = System.getSystemStats();
+            System.println("Memory: total=" + stats.totalMemory + ", used=" + stats.usedMemory + ", free=" + stats.freeMemory);
+            if (stats.usedMemory > (Globals.scLowMem * stats.totalMemory)) {
+                disableMenuCheck();
+            } else if (System.getDeviceSettings().phoneConnected && System.getDeviceSettings().connectionAvailable) {
+                // Navigation must wait for this GET too, otherwise it can overlap
+                // template requests and launch another cache check before it returns.
+                mRequestInFlight = true;
+                fetchMenuConfigBasic(method(:onReturnCheckMenuConfig));
+                return;
+            }
+        }
+        var delay = Settings.getPollDelay();
+        if (delay > 0 || !mCycleHadRequest) {
+            // Empty menus must neither recurse forever nor spin a busy loop.
+            scheduleMenuUpdate(delay > 0 ? delay : 1000);
+        } else {
             updateMenuItems();
         }
     }
@@ -490,6 +564,7 @@ class HomeAssistantApp extends Application.AppBase {
         responseCode as Lang.Number,
         data         as Null or Lang.Dictionary
     ) as Void {
+        mRequestInFlight = false;
         // System.println("HomeAssistantApp onReturnCheckMenuConfig() Response Code: " + responseCode);
         // System.println("HomeAssistantApp onReturnCheckMenuConfig() Response Data: " + data);
 
@@ -518,8 +593,7 @@ class HomeAssistantApp extends Application.AppBase {
             case Communications.NETWORK_RESPONSE_OUT_OF_MEMORY:
                 // System.println("HomeAssistantApp onReturnCheckMenuConfig() Response Code: NETWORK_RESPONSE_OUT_OF_MEMORY, are we going too fast?");
                 disableMenuCheck();
-                var myTimer = new Timer.Timer();
-                myTimer.start(method(:updateMenuItems), Globals.scApiBackoffMs, false);
+                scheduleMenuUpdate(Globals.scApiBackoffMs);
                 break;
 
             case Communications.SECURE_CONNECTION_REQUIRED:
@@ -569,12 +643,14 @@ class HomeAssistantApp extends Application.AppBase {
                     }
                     // Prevent checking the cache is up to date again
                     mIsCacheChecked = true;
-                    var delay = Settings.getPollDelay();
-                    if (delay > 0) {
-                        mUpdateTimer.start(method(:updateMenuItems), delay, false);
-                    } else {
+                    if (mMenuChanged || mRefreshPending || Settings.getPollDelay() == 0) {
+                        mRefreshPending = false;
                         updateMenuItems();
+                    } else {
+                        scheduleMenuUpdate(Settings.getPollDelay());
                     }
+                } else {
+                    scheduleMenuUpdate(Globals.scApiBackoffMs);
                 }
                 break;
 
@@ -593,10 +669,32 @@ class HomeAssistantApp extends Application.AppBase {
         responseCode as Lang.Number,
         data         as Null or Lang.Dictionary
     ) as Void {
+        mRequestInFlight = false;
+        if (mMenuChanged || mRefreshPending) {
+            mRefreshPending = false;
+            // Navigation may have closed a lazy group. Discard its old response and
+            // start the current path; never reuse indexes from a different batch.
+            mDelayedUpdate = false;
+            if (responseCode == Communications.NETWORK_RESPONSE_OUT_OF_MEMORY) {
+                scheduleMenuUpdate(Globals.scApiBackoffMs);
+            } else {
+                updateMenuItems();
+            }
+            return;
+        }
         // System.println("HomeAssistantApp onReturnUpdateMenuItems() Response Code: " + responseCode);
         // System.println("HomeAssistantApp onReturnUpdateMenuItems() Response Data: " + data);
 
         var status = WatchUi.loadResource($.Rez.Strings.Unavailable) as Lang.String;
+        // A failing low-priority batch must not starve the ordinary controls.
+        if (mDelayedUpdate && (responseCode != 200 || data == null)) {
+            mDelayedUpdate = false;
+            scheduleMenuUpdate(Globals.scApiBackoffMs);
+            if (responseCode != Communications.NETWORK_RESPONSE_OUT_OF_MEMORY) {
+                setApiStatus(status);
+            }
+            return;
+        }
         switch (responseCode) {
             case Communications.BLE_HOST_TIMEOUT:
             case Communications.BLE_CONNECTION_UNAVAILABLE:
@@ -621,8 +719,7 @@ class HomeAssistantApp extends Application.AppBase {
 
             case Communications.NETWORK_RESPONSE_OUT_OF_MEMORY:
                 // System.println("HomeAssistantApp onReturnUpdateMenuItems() Response Code: NETWORK_RESPONSE_OUT_OF_MEMORY, are we going too fast?");
-                var myTimer = new Timer.Timer();
-                myTimer.start(method(:updateMenuItems), Globals.scApiBackoffMs, false);
+                scheduleMenuUpdate(Globals.scApiBackoffMs);
                 // A local memory failure provides no new API-status observation.
                 return;
 
@@ -675,27 +772,7 @@ class HomeAssistantApp extends Application.AppBase {
                                 }
                             }
                         }
-                        if (Settings.getMenuCheck() && Settings.getCacheConfig() && !mIsCacheChecked) {
-                            // We are caching the menu configuration, so let's fetch it and check if its been updated.
-                            var stats   = System.getSystemStats(); // stats.* values in bytes
-                            // https://developer.garmin.com/connect-iq/core-topics/debugging/, see "Basic Debugging"
-                            // Create a file on the device called /GARMIN/APPS/LOGS/HOMEASSISTANT.TXT in order to log the values here.
-                            System.println("Memory: total=" + stats.totalMemory + ", used=" + stats.usedMemory + ", free=" + stats.freeMemory);
-                            if (stats.usedMemory > (Globals.scLowMem * stats.totalMemory)) {
-                                // Assume insufficient memory
-                                disableMenuCheck();
-                            } else {
-                                // Assume sufficient memory, but the response code might still turn the automatic check off.
-                                fetchMenuConfigBasic(method(:onReturnCheckMenuConfig));
-                            }
-                        } else {
-                            var delay = Settings.getPollDelay();
-                            if (delay > 0) {
-                                mUpdateTimer.start(method(:updateMenuItems), delay, false);
-                            } else {
-                                updateMenuItems();
-                            }
-                        }
+                        finishMenuUpdate();
                     }
                 }
                 break;
@@ -710,7 +787,16 @@ class HomeAssistantApp extends Application.AppBase {
     //! Construct the GET request to update all menu items.
     //
     function updateMenuItems() as Void {
-        if (mUpdating) {
+        if (mUpdating && !mRequestInFlight) {
+            mRefreshPending = false;
+            if (mMenuChanged) {
+                mMenuChanged = false;
+                mDelayedUpdate = false;
+                clearMenuUpdateCache();
+            }
+            if (!mDelayedUpdate) {
+                mCycleHadRequest = false;
+            }
             var phoneConnected      = System.getDeviceSettings().phoneConnected;
             var connectionAvailable = System.getDeviceSettings().connectionAvailable;
             // In Wi-Fi/LTE execution mode, we should not show an error page but use a toast instead.
@@ -752,8 +838,12 @@ class HomeAssistantApp extends Application.AppBase {
                 setApiStatus(WatchUi.loadResource($.Rez.Strings.Unavailable) as Lang.String);
             } else {
                 mNotifiedNoBle = false;
-                if (mItemsToUpdate == null or mTemplates == null) {
-                    mItemsToUpdate = mHaMenu.getItemsToUpdate();
+                // Reuse each batch until lazy navigation changes eligibility. The
+                // active snapshot stays unchanged while its response is in flight.
+                mItemsToUpdate = mDelayedUpdate ? mDelayedItems : mOrdinaryItems;
+                mTemplates = mDelayedUpdate ? mDelayedTemplates : mOrdinaryTemplates;
+                if (mItemsToUpdate == null || mTemplates == null) {
+                    mItemsToUpdate = mHaMenu.getItemsToUpdate(mDelayedUpdate, false);
                     mTemplates = {};
                     for (var i = 0; i < mItemsToUpdate.size(); i++) {
                         var item     = mItemsToUpdate[i];
@@ -781,26 +871,44 @@ class HomeAssistantApp extends Application.AppBase {
                             }
                         }
                     }
+                    if (mDelayedUpdate) {
+                        mDelayedItems = mItemsToUpdate;
+                        mDelayedTemplates = mTemplates;
+                    } else {
+                        mOrdinaryItems = mItemsToUpdate;
+                        mOrdinaryTemplates = mTemplates;
+                    }
                 }
-                // https://developers.home-assistant.io/docs/api/native-app-integration/sending-data/#render-templates
-                // System.println("HomeAssistantApp updateMenuItems() URL=" + url + ", Template='" + mTemplate + "'");
-                Communications.makeWebRequest(
-                    Settings.getApiUrl() + "/webhook/" + Settings.getWebhookId(),
-                    {
-                        "type" => "render_template",
-                        "data" => mTemplates
-                    },
-                    {
-                        :method       => Communications.HTTP_REQUEST_METHOD_POST,
-                        :headers      => Settings.augmentHttpHeaders({
-                            "Content-Type" => Communications.REQUEST_CONTENT_TYPE_JSON
-                        }),
-                        :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
-                    },
-                    method(:onReturnUpdateMenuItems)
-                );
+                if (mTemplates.size() == 0) {
+                    finishMenuUpdate();
+                    return;
+                }
+                mRequestInFlight = true;
+                mCycleHadRequest = true;
+                requestMenuUpdate(mTemplates);
             }
         }
+    }
+
+    //! Send a single immutable template batch. Separate from polling for testing.
+    function requestMenuUpdate(templates as Lang.Dictionary) as Void {
+        // https://developers.home-assistant.io/docs/api/native-app-integration/sending-data/#render-templates
+        // System.println("HomeAssistantApp updateMenuItems() URL=" + url + ", Template='" + mTemplate + "'");
+        Communications.makeWebRequest(
+            Settings.getApiUrl() + "/webhook/" + Settings.getWebhookId(),
+            {
+                "type" => "render_template",
+                "data" => templates
+            },
+            {
+                :method       => Communications.HTTP_REQUEST_METHOD_POST,
+                :headers      => Settings.augmentHttpHeaders({
+                    "Content-Type" => Communications.REQUEST_CONTENT_TYPE_JSON
+                }),
+                :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
+            },
+            method(:onReturnUpdateMenuItems)
+        );
     }
 
     //! Callback function after completing the GET request to fetch the API status.
@@ -1054,8 +1162,14 @@ class HomeAssistantApp extends Application.AppBase {
         // Don't mess with updates unless we are using a timer.
         if (Settings.getPollDelay() > 0) {
             mUpdateTimer.stop();
-            // For immediate updates
-            updateMenuItems();
+            // Actions can complete while a render or cache check is in flight.
+            // Refresh as soon as it returns rather than waiting a full poll delay.
+            if (mRequestInFlight) {
+                mRefreshPending = true;
+            } else {
+                mDelayedUpdate = false;
+                updateMenuItems();
+            }
         }
     }
 
